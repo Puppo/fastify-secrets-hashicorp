@@ -1,4 +1,5 @@
-import type { FastifyPluginAsync, FastifyInstance } from 'fastify'
+import type { FastifyPluginAsync } from 'fastify'
+import type NodeVault = require('node-vault')
 
 /**
  * Shared symbol used by `createHashiCorpSecretsPlugin` to attach the
@@ -10,60 +11,8 @@ import type { FastifyPluginAsync, FastifyInstance } from 'fastify'
  */
 export const kInferred: unique symbol
 
-/**
- * Options for the underlying HashiCorp Vault client (node-vault).
- *
- * Re-declared locally because `node-vault` does not ship its own TypeScript
- * definitions. Mirrors `NodeVault.VaultOptions` from
- * https://github.com/kr1sp1n/node-vault/blob/main/index.d.ts
- */
-interface VaultOptions {
-  /**
-   * Vault API version. Defaults to `'v1'` when not set.
-   */
-  apiVersion?: string
-
-  /**
-   * Vault endpoint. Defaults to `process.env.VAULT_ADDR` or
-   * `'http://127.0.0.1:8200'`.
-   */
-  endpoint?: string
-
-  /**
-   * Vault namespace (Vault Enterprise).
-   */
-  namespace?: string
-
-  /**
-   * Path prefix appended to every request path.
-   */
-  pathPrefix?: string
-
-  /**
-   * Vault access token. Defaults to `process.env.VAULT_TOKEN`.
-   */
-  token?: string
-
-  /**
-   * Set to `true` to disable custom HTTP verbs (e.g. `LIST`).
-   */
-  noCustomHTTPVerbs?: boolean
-
-  /**
-   * Extra request options forwarded to the underlying HTTP client.
-   */
-  requestOptions?: Record<string, unknown>
-
-  /**
-   * Custom Promise implementation.
-   */
-  Promise?: PromiseConstructor
-
-  /**
-   * Custom logger; receives debug output.
-   */
-  debug?: (...args: unknown[]) => void
-}
+/** Options for the underlying `node-vault` client. */
+type VaultOptions = NodeVault.VaultOptions
 
 /**
  * Reference to a single secret stored in HashiCorp Vault.
@@ -104,14 +53,39 @@ interface HashiCorpClientOptions {
   vaultOptions?: VaultOptions
 }
 
+/** Map of secret names to HashiCorp Vault references. */
+type HashiCorpSecretReferences = Record<string, HashiCorpSecretReference>
+
+/** Values returned by a refresh operation. */
+type SecretValues = Record<string, string | undefined>
+
+/** Refresh all secrets, or only the supplied secret-reference map. */
+type Refresh = (refs?: HashiCorpSecretReferences) => Promise<SecretValues>
+
 /**
- * Default shape of `fastify.secrets` after registration.
+ * Shape stored below a configured namespace.
  *
- * Each entry is `string | undefined` because TypeScript's `Record` indexing
- * always allows `undefined`. At runtime the plugin populates each entry
- * before `ready()` resolves.
+ * The named `refresh` member is optional because `refreshAlias` can rename
+ * it. Dynamic aliases are represented by the index signature.
  */
-type SecretsShape = Record<string, string | undefined>
+interface SecretsNamespace {
+  refresh?: Refresh
+  [key: string]: string | Refresh | undefined
+}
+
+/**
+ * Shape of `fastify.secrets` after registration.
+ *
+ * Fastify's global module augmentation cannot infer whether any particular
+ * registration uses a namespace, so dynamic keys can contain either a
+ * string secret value or a namespaced container. The default `refresh`
+ * member is optional because namespaced registrations place it below the
+ * namespace and `refreshAlias` can rename it.
+ */
+interface SecretsShape {
+  refresh?: Refresh
+  [key: string]: string | Refresh | SecretsNamespace | undefined
+}
 
 /**
  * Plugin registration options.
@@ -122,7 +96,7 @@ interface Options {
   /**
    * Object mapping user-defined secret names to their Vault references.
    */
-  secrets?: Record<string, HashiCorpSecretReference>
+  secrets: HashiCorpSecretReferences
 
   /**
    * Options forwarded to the underlying `HashiCorpClient`.
@@ -160,8 +134,12 @@ declare const fastifySecretsHashiCorp: FastifyPluginAsync<Options>
 declare namespace fastifySecretsHashiCorp {
   export {
     HashiCorpSecretReference,
+    HashiCorpSecretReferences,
     HashiCorpClientOptions,
     Options,
+    Refresh,
+    SecretValues,
+    SecretsNamespace,
     SecretsShape,
     VaultOptions
   }
@@ -183,14 +161,18 @@ declare namespace fastifySecretsHashiCorp {
  */
 export function createHashiCorpSecretsPlugin<SecretsT extends Record<string, HashiCorpSecretReference>>(
   options: Options & { secrets: SecretsT }
-): FastifyPluginAsync<Options> & {
-  readonly [kInferred]?: { [K in keyof SecretsT]: true }
+): FastifyPluginAsync & {
+  readonly [kInferred]: { [K in keyof SecretsT]: true }
 }
 
 export type {
   Options,
   HashiCorpSecretReference,
+  HashiCorpSecretReferences,
   HashiCorpClientOptions,
+  Refresh,
+  SecretValues,
+  SecretsNamespace,
   SecretsShape,
   VaultOptions
 }

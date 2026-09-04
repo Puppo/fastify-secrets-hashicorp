@@ -3,8 +3,24 @@
 const { test } = require('node:test')
 
 const Fastify = require('fastify')
+const proxyquire = require('proxyquire')
 
-const { createHashiCorpSecretsPlugin, kInferred } = require('..')
+class StubClient {
+  constructor(options) {
+    this.options = options
+    StubClient.instances.push(this)
+  }
+
+  async get({ name, key = 'value' }) {
+    return `${name}.${key}`
+  }
+}
+
+StubClient.instances = []
+
+const { createHashiCorpSecretsPlugin, kInferred } = proxyquire('../lib/fastify-secrets-hashicorp', {
+  './client': StubClient
+})
 
 test('createHashiCorpSecretsPlugin', async (t) => {
   await t.test('returns a plugin function with kInferred marker', (t) => {
@@ -16,6 +32,9 @@ test('createHashiCorpSecretsPlugin', async (t) => {
     })
 
     t.assert.equal(typeof plugin, 'function', 'returns a function')
+    t.assert.equal(plugin.Client, StubClient, 'exposes the configured client')
+    t.assert.equal(plugin[Symbol.for('skip-override')], true, 'preserves Fastify plugin metadata')
+    t.assert.equal(plugin[Symbol.for('plugin-meta')].fastify, '5.x', 'requires Fastify 5')
     t.assert.deepStrictEqual(
       plugin[kInferred],
       { dbPassword: true, apiToken: true },
@@ -51,17 +70,40 @@ test('createHashiCorpSecretsPlugin', async (t) => {
     t.assert.throws(() => createHashiCorpSecretsPlugin(), /options object is required/, 'rejects missing options')
   })
 
-  await t.test('returns a plugin that registers on a Fastify instance', async (t) => {
+  await t.test('registers with the captured options', async (t) => {
     const fastify = Fastify({ logger: false })
+    t.after(() => fastify.close())
+
     const plugin = createHashiCorpSecretsPlugin({
       secrets: { dbPassword: { name: 'database', key: 'password' } },
       clientOptions: {
-        vaultOptions: { endpoint: 'http://127.0.0.1:8200' }
+        mountPoint: 'custom-mount'
       }
     })
 
-    t.assert.doesNotThrow(() => fastify.register(plugin), 'accepts register()')
+    fastify.register(plugin)
+    await fastify.ready()
 
-    await fastify.close()
+    t.assert.equal(fastify.secrets.dbPassword, 'database.password', 'decorates Fastify with the secret')
+    t.assert.equal(typeof fastify.secrets.refresh, 'function', 'exposes the refresh function')
+    t.assert.deepStrictEqual(StubClient.instances.at(-1).options, { mountPoint: 'custom-mount' })
+  })
+
+  await t.test('registers with a namespace and refresh alias', async (t) => {
+    const fastify = Fastify({ logger: false })
+    t.after(() => fastify.close())
+
+    const plugin = createHashiCorpSecretsPlugin({
+      namespace: 'database',
+      refreshAlias: 'reload',
+      secrets: { password: { name: 'credentials', key: 'password' } }
+    })
+
+    fastify.register(plugin)
+    await fastify.ready()
+
+    t.assert.equal(fastify.secrets.database.password, 'credentials.password')
+    t.assert.equal(typeof fastify.secrets.database.reload, 'function')
+    t.assert.equal(fastify.secrets.refresh, undefined, 'does not add refresh at the root')
   })
 })

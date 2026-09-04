@@ -69,8 +69,14 @@ fastify.register(fastifySecretsHashiCorp, {
 })
 
 await fastify.ready()
-// fastify.secrets is typed as Record<string, string | undefined>
-console.log(fastify.secrets.dbPassword)
+const dbPassword = fastify.secrets.dbPassword
+if (typeof dbPassword === 'string') {
+  console.log(dbPassword)
+}
+
+// The default refresh method is known, but optional because registrations can
+// place it under a namespace or rename it with refreshAlias.
+await fastify.secrets.refresh?.()
 ```
 
 If you want the captured secret keys to be enumerable at runtime (e.g. for
@@ -86,14 +92,18 @@ const plugin = createHashiCorpSecretsPlugin({
   }
 })
 
-console.log(Object.keys(plugin[kInferred] ?? {})) // ['dbPassword']
+console.log(Object.keys(plugin[kInferred])) // ['dbPassword']
 
 fastify.register(plugin)
+await fastify.ready()
 ```
 
-Note: `fastify.secrets` is typed as `Record<string, string | undefined>` from
-a module augmentation — it is not narrowed to the literal keys from the
-factory. Narrowing that would require a Fastify-side typing change.
+The factory captures the complete options object, so do not pass a second
+options object to `register()`. `fastify.secrets` uses a dynamic module
+augmentation that represents string values, refresh functions, and namespaced
+containers. It cannot narrow dynamic keys to the factory's literal secret or
+namespace names because Fastify's `register()` returns the same
+`FastifyInstance` type.
 
 ### Plugin options
 
@@ -150,6 +160,7 @@ fastify.register(FastifySecretsHashiCorp, {
   }
 })
 ```
+
 #### clientOptions.vaultOptions
 
 Initialisation options that are sent to [node-vault](https://github.com/kr1sp1n/node-vault), typed as [VaultOptions](https://github.com/kr1sp1n/node-vault/blob/70097269d35a58bb560b5290190093def96c87b1/index.d.ts#L115-L130).

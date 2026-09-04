@@ -1,7 +1,4 @@
-import fastifySecretsHashiCorp, {
-  createHashiCorpSecretsPlugin,
-  kInferred
-} from './index.js'
+import fastifySecretsHashiCorp, { createHashiCorpSecretsPlugin, kInferred } from './index.js'
 import { describe, expect, test } from 'tstyche'
 import fastify, { type FastifyInstance } from 'fastify'
 
@@ -22,9 +19,29 @@ describe('fastify-secrets-hashicorp', () => {
       withServer(() => {})
     })
 
-    test('secrets is typed as Record<string, string | undefined>', () => {
+    test('exposes the dynamic secrets shape', () => {
       withServer((server) => {
         expect(server.secrets).type.toBe<fastifySecretsHashiCorp.SecretsShape>()
+
+        const refresh = server.secrets.refresh
+        if (refresh) {
+          expect(refresh).type.toBe<fastifySecretsHashiCorp.Refresh>()
+          expect(refresh).type.toBeCallableWith()
+          expect(refresh).type.toBeCallableWith({
+            dbPassword: { name: 'database', key: 'password' }
+          })
+        }
+      })
+    })
+
+    test('requires secrets in the registration options', () => {
+      expect<{
+        clientOptions: { mountPoint: string }
+      }>().type.not.toBeAssignableTo<fastifySecretsHashiCorp.Options>()
+
+      const server = fastify()
+      expect(server.register).type.not.toBeCallableWith(fastifySecretsHashiCorp, {
+        clientOptions: { mountPoint: 'myproject' }
       })
     })
 
@@ -38,19 +55,40 @@ describe('fastify-secrets-hashicorp', () => {
           useKVv1: true,
           vaultOptions: {
             endpoint: 'http://127.0.0.1:8200',
-            token: 'example-token'
+            token: 'example-token',
+            commands: {
+              customRead: { method: 'GET', path: '/custom' }
+            },
+            requestOptions: {
+              timeout: 1000,
+              strictSSL: false
+            }
           }
         }
       })
     })
 
     test('accepts a namespace', () => {
-      withServer(() => {}, {
-        namespace: 'db',
-        secrets: {
-          password: { name: 'database', key: 'password' }
+      withServer(
+        (server) => {
+          const database = server.secrets.db
+          expect(database).type.not.toBeAssignableTo<string>()
+
+          if (database && typeof database === 'object') {
+            expect(database).type.toBe<fastifySecretsHashiCorp.SecretsNamespace>()
+            const refresh = database.refresh
+            if (refresh) {
+              expect(refresh).type.toBe<fastifySecretsHashiCorp.Refresh>()
+            }
+          }
+        },
+        {
+          namespace: 'db',
+          secrets: {
+            password: { name: 'database', key: 'password' }
+          }
         }
-      })
+      )
     })
 
     test('accepts concurrency and refreshAlias', () => {
@@ -71,7 +109,7 @@ describe('fastify-secrets-hashicorp', () => {
         }
       })
 
-      expect(plugin).type.toBeAssignableTo<Parameters<typeof server.register>[0]>()
+      expect(server.register).type.toBeCallableWith(plugin)
     })
 
     test('attaches captured keys on the kInferred symbol', () => {
@@ -82,7 +120,7 @@ describe('fastify-secrets-hashicorp', () => {
         }
       })
 
-      expect(plugin[kInferred]).type.toBe<{ dbPassword: true; apiToken: true } | undefined>()
+      expect(plugin[kInferred]).type.toBe<{ dbPassword: true; apiToken: true }>()
     })
 
     test('captures a single key on the kInferred symbol', () => {
@@ -92,7 +130,7 @@ describe('fastify-secrets-hashicorp', () => {
         }
       })
 
-      expect(plugin[kInferred]).type.toBe<{ onlyOne: true } | undefined>()
+      expect(plugin[kInferred]).type.toBe<{ onlyOne: true }>()
     })
 
     test('accepts the full clientOptions shape', () => {
@@ -127,7 +165,12 @@ describe('fastify-secrets-hashicorp', () => {
 
       server.register(plugin)
       server.after(() => {
-        expect(server.secrets).type.toBe<fastifySecretsHashiCorp.SecretsShape>()
+        const database = server.secrets.db
+        expect(database).type.not.toBeAssignableTo<string>()
+
+        if (database && typeof database === 'object') {
+          expect(database).type.toBe<fastifySecretsHashiCorp.SecretsNamespace>()
+        }
       })
     })
   })
